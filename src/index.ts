@@ -7,11 +7,13 @@
 import axios from "axios";
 import {createWriteStream, existsSync, mkdirSync, readdirSync} from "fs";
 import {readFile, writeFile} from "fs/promises";
-import prompts =  require("prompts");
+import prompts = require("prompts");
 import {red, grey, bold} from "chalk";
 import {spawn} from "child_process";
 import { promisify } from "util";
 import { finished } from "stream";
+import { getCompatiblePatches } from "./patches";
+import { Apk } from "node-apk";
 
 const cliApiRoute = "https://api.github.com/repos/revanced/revanced-cli/releases/latest";
 const patchesApiRoute = "https://api.github.com/repos/revanced/revanced-patches/releases/latest";
@@ -48,23 +50,29 @@ async function main() {
 
   if(!existsSync("./data/cli.jar")) {
     console.log("Missing CLI, downloading...");
-    await updateCli(cliData.assets[0].browser_download_url, cliVer);
+    await downloadFile(cliData.assets[0].browser_download_url, "./data/cli.jar");
+    await writeFile("./data/.cli-ver", cliVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else if(cliVer != installedCliVer) {
     console.log(`Latest CLI ${cliVer} does not match ${installedCliVer}, downloading...`);
-    await updateCli(cliData.assets[0].browser_download_url, cliVer);
+    await downloadFile(cliData.assets[0].browser_download_url, "./data/cli.jar");
+    await writeFile("./data/.cli-ver", cliVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else {
     console.log("CLI Up to Date:",installedCliVer);
   }
 
-  if(!existsSync("./data/patches.jar")) {
+  if(!existsSync("./data/patches.jar") || !existsSync("./data/patches.json")) {
     console.log("Missing Patches, downloading...");
-    await updatePatches(patchesData.assets[0].browser_download_url, patchesVer);
+    await downloadFile(patchesData.assets[0].browser_download_url, "./data/patches.json");
+    await downloadFile(patchesData.assets[1].browser_download_url, "./data/patches.jar");
+    await writeFile("./data/.patches-ver", patchesVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else if(patchesVer != installedPatchesVer) {
     console.log(`Latest Patches ${patchesVer} does not match ${installedPatchesVer}, downloading...`);
-    await updatePatches(patchesData.assets[0].browser_download_url, patchesVer);
+    await downloadFile(patchesData.assets[0].browser_download_url, "./data/patches.json");
+    await downloadFile(patchesData.assets[1].browser_download_url, "./data/patches.jar");
+    await writeFile("./data/.patches-ver", patchesVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else {
     console.log("Patches Up to Date:",installedPatchesVer);
@@ -72,11 +80,13 @@ async function main() {
 
   if(!existsSync("./data/integrations.apk")) {
     console.log("Missing Integrations, downloading...");
-    await updateIntegrations(integrationsData.assets[0].browser_download_url, integrationsVer);
+    await downloadFile(integrationsData.assets[0].browser_download_url, "./data/integrations.apk");
+    await writeFile("./data/.integrations-ver", integrationsVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else if(integrationsVer != installedIntegrationsVer) {
     console.log(`Latest Integrations ${integrationsVer} does not match ${installedIntegrationsVer}, downloading...`);
-    await updateIntegrations(integrationsData.assets[0].browser_download_url, integrationsVer);
+    await downloadFile(integrationsData.assets[0].browser_download_url, "./data/integrations.apk");
+    await writeFile("./data/.integrations-ver", integrationsVer, {encoding: "utf-8"});
     console.log("OK!\n");
   } else {
     console.log("Integrations Up to Date:",installedIntegrationsVer);
@@ -87,13 +97,25 @@ async function main() {
     process.exit(1);
   }
 
-  let baseOpts = await prompts([
+  let apk = await prompts([
     {
       type: "select",
-      name: "apkPath",
+      name: "path",
       message: "Select APK",
       choices: readdirSync("./data/apks", {withFileTypes: true}).filter(e => e.isFile).map(e => {return {title: e.name, value: e.name}})
-    },
+    }
+  ]);
+
+  let data = new Apk("./data/apks/"+apk.path);
+  let manifest = await data.getManifestInfo();
+  data.close();
+  let compatiblePatches = await getCompatiblePatches(manifest);
+  if(compatiblePatches.length == 0) {
+    console.log(red(bold("No compatible patches"))+" for "+grey(manifest.package+" v"+manifest.versionName));
+    process.exit(1);
+  }
+
+  let baseOpts = await prompts([
     {
       type: "confirm",
       name: "useIntegrations",
@@ -122,48 +144,55 @@ async function main() {
       }
     ]);
     if(!adbOpts.rootMode) console.log(bold(red("Heads Up! "))+"You might need to uninstall the app first for automatic installation to work.")
+    else if(manifest.package == "com.google.android.youtube")
+      console.log(bold(red("Heads Up! "))+"Since you've enabled root mode, the "+grey("microg-support")+" patch is automatically excluded.")
+    else if(manifest.package == "com.google.android.apps.youtube.music")
+      console.log(bold(red("Heads Up! "))+"Since you've enabled root mode, the "+grey("music-microg-support")+" patch is automatically excluded.")
   }
+
+  let excludePatches = compatiblePatches.filter(v => !v.excluded).map(v => [{title: v.name, description: v.description}][0]);
+  let includePatches = compatiblePatches.filter(v => v.excluded).map(v => [{title: v.name, description: v.description}][0])
 
   let patchOpts = await prompts([
     {
-      type: "text",
+      type: excludePatches.length ? "multiselect" : null,
       name: "exclude",
-      message: "Exclude Patches"
+      message: "Exclude Patches",
+      choices: excludePatches,
+      instructions: false,
     },
     {
-      type: "text",
+      type: includePatches.length ? "multiselect" : null,
       name: "include",
-      message: "Include Patches"
+      message: "Include Patches",
+      choices: includePatches,
+      instructions: false
     }
   ]);
 
-  // console.log(baseOpts);
-  // console.log(adbOpts);
-  // console.log(patchOpts);
-
   let args = [
     "-jar","cli.jar",
-    "-a",`apks/${baseOpts.apkPath}`,
+    "-a",`apks/${apk.path}`,
     "-b","patches.jar",
-    "-o",`patched/${baseOpts.apkPath}`
+    "-o",`patched/${apk.path}`
   ];
 
   if(baseOpts.useIntegrations) args.push("-m","integrations.apk");
   if(baseOpts.useAdb) args.push("-d",adbOpts?.deviceId);
   if(adbOpts?.rootMode) args.push("--mount");
+  if(adbOpts?.rootMode && manifest.package == "com.google.android.youtube") args.push("-e","microg-support");
+  else if(adbOpts?.rootMode && manifest.package == "com.google.android.apps.youtube.music") args.push("-e", "music-microg-support");
 
   // overkill simplification thanks to Palm#0683 on Discord
-  const patchOptsExists = (key: `${'in' | 'ex'}clude`) => !!patchOpts[key].trim().length
-  const addPatchArgs = (flag: string, patches: string) => patches.trim().split(" ").forEach((p: string) => args.push(flag, p));
+  const patchOptsExists = (key: `${'in' | 'ex'}clude`) => !!patchOpts[key]?.length
+  const addPatchArgs = (flag: string, patches: string[]) => patches.forEach((p: string) => args.push(flag, p));
 
   if(patchOptsExists("exclude")) addPatchArgs("-e", patchOpts.exclude);
   if(patchOptsExists("include")) addPatchArgs("-i", patchOpts.include);
 
-  console.log(args);
+  // console.log(args);
 
-  let javaProcess = spawn("java", args, {
-    cwd: "./data"
-  });
+  let javaProcess = spawn("java", args, {cwd: "./data"});
 
   javaProcess.stdout.on("data", (data) => {
     console.log(data.toString().trimEnd());
@@ -174,33 +203,16 @@ async function main() {
   });
 
   javaProcess.on("close", (code) => {
-    console.log("Java closed with code "+code);
+    console.log(grey("Java process exit with code "+code));
   })
 }
 
 let fin = promisify(finished);
 
-async function updateCli(path: string, version: string) {
-  let stream = createWriteStream("./data/cli.jar");
-  let cli = await axios.get(path, {responseType: "stream"});
-  cli.data.pipe(stream);
-  await writeFile("./data/.cli-ver", version, "utf8");
-  return fin(stream);
-}
-
-async function updatePatches(path: string, version: string) {
-  let stream = createWriteStream("./data/patches.jar");
-  let patches = await axios.get(path, {responseType: "stream"});
-  patches.data.pipe(stream);
-  await writeFile("./data/.patches-ver", version, "utf8");
-  return fin(stream);
-}
-
-async function updateIntegrations(path: string, version: string) {
-  let stream = createWriteStream("./data/integrations.apk");
-  let integrations = await axios.get(path, {responseType: "stream"});
-  integrations.data.pipe(stream);
-  await writeFile("./data/.integrations-ver", version, "utf8");
+async function downloadFile(url: string, filename: string) {
+  let stream = createWriteStream(filename);
+  let file = await axios.get(url, {responseType: "stream"});
+  file.data.pipe(stream);
   return fin(stream);
 }
 
