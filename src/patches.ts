@@ -22,7 +22,7 @@ export async function getCompatiblePatches(manifest: Manifest) {
 	patches.forEach((patch) => {
 		if(patch.compatiblePackages.filter((v) =>
 			v.name == manifest.package
-			&& v.versions.includes(manifest.versionName)
+			&& (!v.versions.length || v.versions.includes(manifest.versionName))
 		).length != 0) {
 			compatiblePatches.push(patch);
 		}
