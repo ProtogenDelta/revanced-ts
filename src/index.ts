@@ -43,11 +43,11 @@ async function main() {
 			type: "select",
 			name: "path",
 			message: "Select APK",
-			choices: readdirSync("./data/apks", {withFileTypes: true}).filter(e => e.isFile).map(e => {return {title: e.name, value: "./data/apks/"+e.name}})
+			choices: readdirSync("./data/apks", {withFileTypes: true}).filter(e => e.isFile).map(e => {return {title: e.name, value: e.name}})
 		}
 	]);
 
-	let data = new Apk(apk.path);
+	let data = new Apk("./data/apks/"+apk.path);
 	let manifest = await data.getManifestInfo();
 	data.close();
 	let compatiblePatches = await getCompatiblePatches(manifest);
