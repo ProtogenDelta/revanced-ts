@@ -1,9 +1,3 @@
-// fair warning to anyone attempting to read (or worse, use)
-// this, it is a mess. I wrote it in the middle of the night
-// with next to no sleep and should not be considered a
-// reliable tool in the slightest. But it does what I need
-// so it's good enough for me.
-
 import { existsSync, mkdirSync, readdirSync} from "fs";
 import prompts = require("prompts");
 import {red, grey } from "chalk";
